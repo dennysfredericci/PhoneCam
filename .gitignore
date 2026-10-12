@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller output (Phase 2)
+build/
+dist/
+
+# macOS / editor tooling
+.DS_Store
+.impeccable/

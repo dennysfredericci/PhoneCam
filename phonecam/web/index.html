@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>PhoneCam</title>
+<style>
+  :root {
+    --bg: #000; --fg: #f2f2f2; --muted: #a0a0a0; --panel: rgba(20, 20, 20, .72);
+    --ok: #34c759; --wait: #ffcc00; --err: #ff453a; --idle: #8e8e93; --accent: #0a84ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent; overflow: hidden; }
+  video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  video.mirror { transform: scaleX(-1); } /* front camera preview only; the Mac gets the unmirrored image */
+  .top, .bottom { position: fixed; left: 0; right: 0; display: flex; flex-direction: column; gap: 8px;
+    padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left)); }
+  .top { top: 0; padding-top: max(12px, env(safe-area-inset-top)); align-items: flex-start; }
+  .bottom { bottom: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); align-items: center; }
+  .pill { background: var(--panel); border-radius: 999px; padding: 6px 12px; display: inline-flex; align-items: center;
+    gap: 8px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  #state::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--idle)); }
+  #state[data-kind="ok"] { --dot: var(--ok); }
+  #state[data-kind="wait"] { --dot: var(--wait); }
+  #state[data-kind="err"] { --dot: var(--err); }
+  #stats { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  #stats:empty { display: none; }
+  .msg { background: var(--panel); border: 1px solid color-mix(in srgb, var(--err) 55%, transparent); border-radius: 12px;
+    padding: 10px 12px; max-width: 560px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .msg.note { border-color: color-mix(in srgb, var(--wait) 55%, transparent); }
+  .msg[hidden] { display: none; }
+  .pin { display: flex; flex-direction: column; gap: 8px; width: min(100%, 360px);
+    border-color: color-mix(in srgb, var(--fg) 18%, transparent); }
+  .pin[hidden] { display: none; }
+  .pin label { font-weight: 600; }
+  .pin-row { display: flex; gap: 8px; }
+  .pin input { flex: 1; min-width: 0; min-height: 48px; border-radius: 12px; text-align: center;
+    font: inherit; font-size: 22px; letter-spacing: .2em; color: var(--fg); background: rgba(0, 0, 0, .45);
+    border: 1px solid color-mix(in srgb, var(--fg) 25%, transparent); }
+  .pin-msg { color: var(--muted); font-size: 13px; }
+  .pin-msg:empty { display: none; }
+  .hint { display: none; color: var(--muted); font-size: 13px; }
+  body.running .hint { display: block; }
+  @media (orientation: landscape) { body.running .hint { display: none; } }
+  .buttons { display: flex; gap: 12px; }
+  button { font: inherit; font-weight: 600; color: var(--fg); background: var(--panel); border: 0; border-radius: 999px;
+    min-height: 48px; padding: 0 22px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  button.primary { background: var(--accent); min-width: 120px; }
+  body.running button.primary { background: var(--err); }
+  button:disabled { opacity: .5; }
+  .placeholder { position: fixed; inset: 0; display: grid; place-content: center; text-align: center;
+    padding: 24px; color: var(--muted); }
+  body.running .placeholder { display: none; }
+  .placeholder h1 { color: var(--fg); font-size: 22px; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<div class="placeholder">
+  <h1>PhoneCam</h1>
+  <div>Tap Start to use this phone as your Mac's webcam.</div>
+</div>
+<video id="preview" autoplay playsinline muted></video>
+
+<div class="top">
+  <div id="state" class="pill" data-kind="idle">Stopped</div>
+  <div id="stats" class="pill"></div>
+</div>
+
+<div class="bottom">
+  <form id="pinForm" class="msg pin" hidden>
+    <label for="pin">PIN shown on your Mac</label>
+    <div class="pin-row">
+      <input id="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="32" required>
+      <button type="submit" class="primary">Connect</button>
+    </div>
+    <div id="pinMsg" class="pin-msg"></div>
+  </form>
+  <div id="msg" class="msg" hidden></div>
+  <div id="note" class="msg note" hidden></div>
+  <div class="hint pill">Turn the phone sideways for a full 16:9 picture</div>
+  <div class="buttons">
+    <button id="switch" type="button">Flip camera</button>
+    <button id="start" type="button" class="primary">Start</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const MAX_BITRATE = 8_000_000; // bits/s
+// Open the page with "?relay" to force video through the Mac's TCP relay
+// (troubleshooting; normally the relay is only used when direct UDP fails).
+const FORCE_RELAY = new URLSearchParams(location.search).has("relay");
+const $ = (id) => document.getElementById(id);
+const video = $("preview"), startBtn = $("start"), switchBtn = $("switch");
+
+// A random id per browser tab, so the Mac can tell "same phone reconnecting"
+// apart from "a different phone" (see the 409 handling below).
+const clientId = sessionStorage.getItem("phonecam-id") || Math.random().toString(36).slice(2);
+sessionStorage.setItem("phonecam-id", clientId);
+
+let running = false;
+let facing = "environment";   // back camera: better quality than the selfie camera
+let stream = null, pc = null, sender = null;
+let wakeLock = null, statsTimer = null, retryTimer = null, retryDelay = 1000, lastStats = null;
+
+// The Mac only accepts phones that send its PIN. It's remembered on this
+// phone after it's typed once, and asked again if the Mac rejects it.
+function storedPin() { try { return localStorage.getItem("phonecam-pin") || ""; } catch (e) { return ""; } }
+function savePin(pin) {
+  try { if (pin) localStorage.setItem("phonecam-pin", pin); else localStorage.removeItem("phonecam-pin"); } catch (e) {}
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    cache: "no-store",
+    ...options,
+    headers: { ...(options.headers || {}), "X-PhoneCam-PIN": storedPin() },
+  });
+  if (!res.ok) {
+    const err = new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+function askForPin(message) {
+  clearTimeout(retryTimer);
+  closePeer();
+  setState("PIN required", "wait");
+  $("pinMsg").textContent = message || "";
+  $("pinForm").hidden = false;
+  $("pin").value = "";
+  $("pin").focus();
+}
+
+function setState(text, kind) { $("state").textContent = text; $("state").dataset.kind = kind; }
+function showError(text) { $("msg").textContent = text || ""; $("msg").hidden = !text; }
+function showNote(text) { $("note").textContent = text || ""; $("note").hidden = !text; }
+
+// ---------- camera ----------
+
+function cameraErrorMessage(err) {
+  switch (err && err.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return "Camera access is blocked. iPhone: tap \"aA\" in the address bar > Website Settings > Camera > Allow, then reload. " +
+             "Android: tap the icon left of the address > Permissions > Camera > Allow, then reload.";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "No camera was found on this device.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "The camera is busy. Close other apps that use it (Camera, FaceTime, WhatsApp...) and tap Start again.";
+    case "OverconstrainedError":
+      return "This camera doesn't support the requested video mode.";
+    default:
+      return `Could not open the camera (${err && err.name}: ${err && err.message}).`;
+  }
+}
+
+async function openCamera() {
+  const s = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: facing },
+      width: { ideal: 1920 }, height: { ideal: 1080 },
+      frameRate: { ideal: 30, max: 30 },
+    },
+  });
+  const track = s.getVideoTracks()[0];
+  // "detail" tells the encoder to keep resolution and drop frame rate first
+  // when bandwidth or CPU is short (Chrome; harmless elsewhere).
+  if ("contentHint" in track) track.contentHint = "detail";
+  // Fires when the OS takes the camera away (e.g. iOS when the page is
+  // backgrounded, or a phone call), not when we call track.stop() ourselves.
+  track.onended = () => { if (running) restoreCamera(); };
+  stream = s;
+  video.srcObject = s;
+  video.classList.toggle("mirror", facing === "user");
+  video.play().catch(() => {});
+}
+
+function stopCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  video.srcObject = null;
+}
+
+async function restoreCamera() {
+  // Reopen a camera that the OS ended, and hand the new track to the
+  // existing connection (replaceTrack needs no renegotiation).
+  try {
+    stopCamera();
+    await openCamera();
+    if (sender) await sender.replaceTrack(stream.getVideoTracks()[0]);
+  } catch (err) {
+    showError(cameraErrorMessage(err));
+  }
+}
+
+async function flipCamera() {
+  facing = facing === "environment" ? "user" : "environment";
+  if (!running) return; // applied on next Start
+  switchBtn.disabled = true;
+  stopCamera(); // iPhones can only run one camera at a time
+  await restoreCamera();
+  switchBtn.disabled = false;
+}
+
+// ---------- WebRTC ----------
+
+function preferH264(transceiver) {
+  // Hardware H.264 encoding keeps the phone cool and the latency low. The Mac
+  // (aiortc) decodes packetization-mode=1 constrained-baseline/baseline H.264
+  // only, so those variants go first; VP8 stays as a fallback.
+  if (!transceiver.setCodecPreferences) return;
+  const rank = (c) => {
+    const fmtp = c.sdpFmtpLine || "";
+    if (c.mimeType === "video/H264") {
+      return /packetization-mode=1/.test(fmtp) && /profile-level-id=42/i.test(fmtp) ? 0 : 1;
+    }
+    if (c.mimeType === "video/VP8") return 2;
+    return 3; // rtx/red/ulpfec and other codecs
+  };
+  for (const caps of [RTCRtpReceiver.getCapabilities?.("video"), RTCRtpSender.getCapabilities?.("video")]) {
+    if (!caps) continue;
+    try {
+      transceiver.setCodecPreferences([...caps.codecs].sort((a, b) => rank(a) - rank(b)));
+      return;
+    } catch (err) { /* some browsers validate against the other capability list */ }
+  }
+}
+
+async function tuneSender() {
+  const params = sender.getParameters();
+  if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+  params.encodings[0].maxBitrate = MAX_BITRATE;
+  params.encodings[0].maxFramerate = 30;
+  // Keep 1080p and drop frames when Wi-Fi gets tight, rather than going blurry.
+  params.degradationPreference = "maintain-resolution";
+  try {
+    await sender.setParameters(params);
+  } catch (err) {
+    delete params.degradationPreference;
+    await sender.setParameters(params).catch((e) => console.warn("setParameters failed", e));
+  }
+}
+
+function waitForIceGathering(peer, timeoutMs) {
+  // The Mac side doesn't support trickle ICE, so the offer must already
+  // contain all our network candidates. On a LAN this takes a few ms.
+  return new Promise((resolve) => {
+    if (peer.iceGatheringState === "complete") return resolve();
+    const done = () => { if (peer.iceGatheringState === "complete") { peer.removeEventListener("icegatheringstatechange", done); resolve(); } };
+    peer.addEventListener("icegatheringstatechange", done);
+    setTimeout(resolve, timeoutMs);
+  });
+}
+
+function closePeer() {
+  if (pc) {
+    pc.onconnectionstatechange = null;
+    pc.close();
+  }
+  pc = null;
+  sender = null;
+  lastStats = null;
+  $("stats").textContent = "";
+}
+
+async function connect(isReconnect) {
+  clearTimeout(retryTimer);
+  closePeer();
+  setState("Connecting to Mac...", "wait");
+
+  // The Mac's own TURN relay over TCP (no internet servers). Direct UDP is
+  // tried first; the relay rescues cases where UDP can't reach the Mac, such
+  // as when this iPhone is the Personal Hotspot the Mac is connected to.
+  const config = await api("/config");
+  const peer = new RTCPeerConnection({
+    iceServers: config.iceServers,
+    iceTransportPolicy: FORCE_RELAY ? "relay" : "all",
+  });
+  pc = peer;
+  const transceiver = peer.addTransceiver(stream.getVideoTracks()[0], { direction: "sendonly", streams: [stream] });
+  sender = transceiver.sender;
+  preferH264(transceiver);
+  peer.onconnectionstatechange = () => onConnectionState(peer);
+
+  await peer.setLocalDescription(await peer.createOffer());
+  await waitForIceGathering(peer, 3000);
+  if (pc !== peer) return;
+
+  const answer = await api("/offer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type, clientId, reconnect: isReconnect }),
+  });
+  if (pc !== peer) return;
+  await peer.setRemoteDescription(answer);
+  await tuneSender();
+}
+
+function onConnectionState(peer) {
+  if (peer !== pc) return;
+  switch (peer.connectionState) {
+    case "connected":
+      setState("Live on Mac", "ok");
+      showError("");
+      retryDelay = 1000;
+      break;
+    case "disconnected":
+      // Often recovers by itself (brief Wi-Fi hiccup); give it a moment.
+      setState("Connection interrupted...", "wait");
+      setTimeout(() => { if (peer === pc && peer.connectionState !== "connected") reconnectSoon(); }, 4000);
+      break;
+    case "failed":
+    case "closed":
+      reconnectSoon();
+      break;
+  }
+}
+
+function reconnectSoon() {
+  if (!running) return;
+  closePeer();
+  setState(`Reconnecting in ${Math.round(retryDelay / 1000)} s...`, "wait");
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => {
+    connect(true).catch(onConnectError);
+  }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 8000);
+}
+
+function onConnectError(err) {
+  if (!running) return;
+  if (err.status === 401) { // missing or wrong PIN: keep the camera on, ask for it
+    const hadPin = storedPin() !== "";
+    savePin("");
+    askForPin(hadPin ? err.message : ""); // first visit: the form label says it all
+    return;
+  }
+  if (err.status === 429) { // too many wrong PINs
+    stop();
+    setState("Locked for a minute", "err");
+    showError(err.message);
+    return;
+  }
+  if (err.status === 409) {
+    stop();
+    setState("Another phone took over", "idle");
+    showError("Another phone is now the webcam. Tap Start to take over again.");
+    return;
+  }
+  console.warn("connect failed", err);
+  showError(err.status ? `The Mac refused the connection: ${err.message}` :
+    "Can't reach the Mac. Check that PhoneCam is running and that both devices are on the same Wi-Fi.");
+  reconnectSoon();
+}
+
+// ---------- stats ----------
+
+async function updateStats() {
+  if (!sender || !pc || pc.connectionState !== "connected") return;
+  const report = await sender.getStats();
+  let out = null;
+  report.forEach((r) => { if (r.type === "outbound-rtp" && r.kind === "video") out = r; });
+  if (!out) return;
+  const codec = out.codecId && report.get(out.codecId);
+  const prev = lastStats;
+  lastStats = out;
+  if (!prev) return;
+  const secs = (out.timestamp - prev.timestamp) / 1000;
+  if (secs <= 0) return;
+  // Computed from counters rather than framesPerSecond, which Safari lacks.
+  const fps = (out.framesEncoded - prev.framesEncoded) / secs;
+  const mbps = ((out.bytesSent - prev.bytesSent) * 8) / secs / 1e6;
+  const parts = [
+    out.frameWidth ? `${out.frameWidth}×${out.frameHeight}` : "-",
+    `${Math.round(fps)} fps`,
+    `${mbps.toFixed(1)} Mbps`,
+  ];
+  if (codec) parts.push(codec.mimeType.replace("video/", ""));
+  if (out.qualityLimitationReason && out.qualityLimitationReason !== "none") parts.push(`limited by ${out.qualityLimitationReason}`);
+  // The network path lives in the connection-wide stats, not the sender's.
+  const all = await pc.getStats();
+  all.forEach((r) => {
+    if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") {
+      const local = all.get(r.localCandidateId);
+      if (local && local.candidateType === "relay") parts.push("via TCP relay");
+    }
+  });
+  $("stats").textContent = parts.join(" · ");
+}
+
+// ---------- wake lock ----------
+
+async function keepAwake() {
+  if (!("wakeLock" in navigator)) {
+    showNote("This browser can't keep the screen on. Set Auto-Lock to Never while streaming.");
+    return;
+  }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch (err) {
+    console.warn("wake lock failed", err);
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !running) return;
+  keepAwake(); // the browser releases the wake lock whenever the page is hidden
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track || track.readyState === "ended") restoreCamera();
+  if (!pc || pc.connectionState === "failed" || pc.connectionState === "closed") {
+    retryDelay = 1000;
+    reconnectSoon();
+  }
+});
+
+// ---------- start / stop ----------
+
+async function start() {
+  showError("");
+  showNote("");
+  running = true;
+  document.body.classList.add("running");
+  startBtn.textContent = "Stop";
+  setState("Opening camera...", "wait");
+  try {
+    await openCamera();
+  } catch (err) {
+    stop();
+    setState("Camera unavailable", "err");
+    showError(cameraErrorMessage(err));
+    return;
+  }
+  keepAwake();
+  statsTimer = setInterval(() => updateStats().catch(() => {}), 1000);
+  retryDelay = 1000;
+  connect(false).catch(onConnectError);
+}
+
+function stop() {
+  running = false;
+  document.body.classList.remove("running");
+  startBtn.textContent = "Start";
+  clearTimeout(retryTimer);
+  clearInterval(statsTimer);
+  $("pinForm").hidden = true;
+  closePeer(); // the Mac sees the connection close and switches to black
+  stopCamera();
+  if (wakeLock) wakeLock.release().catch(() => {});
+  wakeLock = null;
+  setState("Stopped", "idle");
+}
+
+startBtn.addEventListener("click", () => (running ? stop() : start()));
+$("pinForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  savePin($("pin").value.trim());
+  $("pinForm").hidden = true;
+  $("pin").blur(); // close the keyboard so the preview is visible again
+  if (running) connect(false).catch(onConnectError);
+});
+switchBtn.addEventListener("click", flipCamera);
+
+if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  startBtn.disabled = switchBtn.disabled = true;
+  setState("Not supported", "err");
+  showError(window.isSecureContext
+    ? "This browser can't use the camera. Use Safari on iPhone or Chrome on Android."
+    : "The camera only works over https://. Open the https:// address shown on your Mac.");
+} else if (!window.RTCPeerConnection) {
+  startBtn.disabled = switchBtn.disabled = true;
+  setState("Not supported", "err");
+  showError("This browser doesn't support WebRTC. Use Safari on iPhone or Chrome on Android.");
+}
+</script>
+</body>
+</html>
