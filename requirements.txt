@@ -6,6 +6,9 @@ av==17.1.0            # FFmpeg bindings: H.264 decode + scaling (aiortc 1.15 nee
 cryptography==50.0.2  # self-signed certificate
 numpy==2.5.4
 pyvirtualcam==0.15.0  # 0.14+ is needed for the OBS 30+ camera extension
+pypng==0.20220715.0   # PNG writer for the QR code (pure Python, no Pillow needed)
+qrcode==8.2
+rumps==0.4.0          # menu-bar app (menubar.py sets one private attribute; re-check on upgrade)
 
 # Transitive dependencies (pinned too, so a rebuild gets the same libraries)
 aiohappyeyeballs==2.7.1
@@ -23,6 +26,8 @@ propcache==0.5.4
 pycparser==3.11
 pyee==14.0.0
 pylibsrtp==1.0.0
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
 pyOpenSSL==26.4.0
 typing_extensions==4.16.0
 yarl==1.25.1

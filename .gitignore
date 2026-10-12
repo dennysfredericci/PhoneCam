@@ -3,9 +3,10 @@
 __pycache__/
 *.pyc
 
-# PyInstaller output (Phase 2)
+# PyInstaller output and build.sh's venv
 build/
 dist/
+.build-venv/
 
 # macOS / editor tooling
 .DS_Store

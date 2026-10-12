@@ -19,7 +19,8 @@ iPhone Safari / Android Chrome  --WebRTC (H.264, same Wi-Fi)-->  PhoneCam on the
 
 ## Requirements
 
-- macOS 13 or newer, on Intel or Apple Silicon.
+- A Mac with **Apple Silicon** (M1, M2, M3, M4...) on macOS 14 or newer, or an **Intel** Mac on
+  macOS 13 or newer.
 - **OBS Studio 30 or newer** ([obsproject.com](https://obsproject.com)). PhoneCam uses its
   virtual camera driver. OBS does not need to be running while you use PhoneCam.
 - An iPhone with Safari or an Android phone with Chrome, on the **same Wi-Fi** as the Mac.
@@ -34,9 +35,46 @@ iPhone Safari / Android Chrome  --WebRTC (H.264, same Wi-Fi)-->  PhoneCam on the
 4. Quit OBS, or at least keep its own Virtual Camera **stopped** while PhoneCam runs:
    only one program can feed the virtual camera at a time.
 
+## Install PhoneCam
+
+1. Find your Mac's type: Apple menu > **About This Mac**. "Chip: Apple M..." means Apple Silicon,
+   and "Processor: Intel" means Intel.
+2. Download the matching zip from the
+   [latest release](https://github.com/dennysfredericci/PhoneCam/releases/latest):
+   `PhoneCam-x.y.z-apple-silicon.zip` or `PhoneCam-x.y.z-intel.zip`.
+3. Unzip it and drag **PhoneCam.app** into **Applications**.
+
+### Opening it the first time
+
+PhoneCam isn't signed with a paid Apple Developer ID, so macOS blocks the first launch.
+You only need to allow it once:
+
+- **macOS 15 (Sequoia) or newer:** double-click PhoneCam. When macOS says it can't verify the app,
+  click **Done**. Open **System Settings > Privacy & Security**, scroll down to the message about
+  PhoneCam, click **Open Anyway**, and confirm with your password.
+- **macOS 13 or 14:** right-click (or Control-click) PhoneCam in Applications, choose **Open**,
+  then click **Open** in the dialog.
+- **Or, in Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/PhoneCam.app`
+
+When PhoneCam starts, macOS may also ask whether it may accept incoming network connections and
+find devices on your local network. Allow both, because the phone connects over the network.
+
+## Using PhoneCam
+
+PhoneCam lives in the **menu bar** as a video camera icon. There's no Dock icon. The icon is filled
+while a phone is streaming, and shows a warning triangle if something needs attention. Click it to see:
+
+- the status, for example *Waiting for phone* or *Connected to 192.168.1.30*;
+- the URL to open on the phone, and the **PIN**. Click either one to copy it;
+- **Show QR Code**: scan it with the phone's camera. It opens the page with the PIN already
+  filled in;
+- **Open Log Folder** and **Quit PhoneCam**.
+
+To start PhoneCam automatically, add it in **System Settings > General > Login Items**.
+
 ## Run from source (development)
 
-Requires Python 3.12 or newer on the Mac where you develop. The finished app (Phase 2) won't need Python.
+Requires Python 3.12 or newer. Only the Mac you develop or build on needs Python; the app bundles its own.
 
 ```bash
 python3 -m venv .venv
@@ -45,9 +83,12 @@ python3 -m venv .venv
 .venv/bin/python -m phonecam --port 9443  # another port
 .venv/bin/python -m phonecam --test-pattern  # check the virtual camera without a phone
 .venv/bin/python -m phonecam --debug     # log every WebRTC connection check
+.venv/bin/python -m phonecam --menubar   # the menu-bar version, as in PhoneCam.app
+.venv/bin/python -m phonecam --self-test # check that all libraries work
 ```
 
-PhoneCam prints the URL to open on the phone, for example `https://192.168.1.20:8443`, and the **PIN**.
+In the terminal version, PhoneCam prints the URL to open on the phone, for example
+`https://192.168.1.20:8443`, and the **PIN**.
 
 The certificate, `settings.json` and `phonecam.log` are in `~/Library/Application Support/PhoneCam`.
 `settings.json` looks like `{"port": 8443, "turn_port": 3478, "pin": "042917"}`.
@@ -58,7 +99,7 @@ Anyone on the same Wi-Fi can open the page, so streaming needs a PIN. Without it
 could replace your video with their camera. They could never *see* your camera, because
 video only goes from the phone to the Mac.
 
-- A random 6-digit PIN is created on first run and printed at startup.
+- A random 6-digit PIN is created on first run. It's shown in the menu bar, or printed in the terminal version.
 - The phone asks for it once and remembers it. If it's wrong or you change it, the phone asks again.
 - After 5 wrong tries, that address is locked out for 60 seconds.
 - To change the PIN, edit `"pin"` in `settings.json` and restart PhoneCam.
@@ -66,7 +107,8 @@ video only goes from the phone to the Mac.
 
 ## Connect your phone
 
-Open the URL that PhoneCam prints, in **Safari** (iPhone) or **Chrome** (Android). The first time,
+Scan the QR code from the menu bar, or open the URL shown there in **Safari** (iPhone) or
+**Chrome** (Android). The first time,
 the browser warns about the certificate. PhoneCam creates its own certificate, so this warning is
 expected. You'll see it again only when the Mac's IP address changes, because PhoneCam then
 creates a new certificate.
@@ -74,11 +116,13 @@ creates a new certificate.
 **iPhone (Safari)**
 1. On "This Connection Is Not Private", tap **Show Details**, then **visit this website**,
    then **Visit Website**.
-2. Tap **Start**, then **Allow** camera access, then enter the **PIN** (only the first time).
+2. Tap **Start**, then **Allow** camera access. Enter the **PIN** if asked; the QR code
+   fills it in for you.
 
 **Android (Chrome)**
 1. On "Your connection is not private", tap **Advanced**, then **Proceed to 192.168.x.x (unsafe)**.
-2. Tap **Start**, then **Allow** camera access, then enter the **PIN** (only the first time).
+2. Tap **Start**, then **Allow** camera access. Enter the **PIN** if asked; the QR code
+   fills it in for you.
 
 The page shows the connection state and the actual resolution, frame rate, bitrate and codec
 being sent. **Flip camera** switches between the front and back cameras, and the screen stays on
@@ -94,6 +138,52 @@ Select **OBS Virtual Camera** as the camera:
 - **OBS**: add a source **Video Capture Device**, then pick **OBS Virtual Camera**.
 
 If an app was already open when you set up the OBS Virtual Camera, restart that app once.
+
+## Build the app
+
+`build.sh` builds `PhoneCam.app` for the CPU type of the Mac it runs on. It needs Python 3.12 or
+newer on that Mac, and nothing else.
+
+```bash
+./build.sh                                   # uses python3 from PATH
+PYTHON=/path/to/python3.14 ./build.sh        # or a specific Python
+```
+
+It creates a clean venv in `.build-venv/`, installs the pinned `requirements.txt` and
+`requirements-build.txt`, and runs PyInstaller with `PhoneCam.spec`. Then it checks that no
+library in the bundle points outside the app or macOS, verifies the code signature, and runs the
+app's `--self-test` in an empty environment: a full WebRTC/H.264 call inside the app, no OBS needed.
+The output is `dist/PhoneCam.app` and `dist/PhoneCam-<version>-<apple-silicon|intel>.zip`.
+
+The app can't be "universal" (one download for both CPU types), because PyAV, the video
+library, ships separate Apple Silicon and Intel builds. That's why there are two zips.
+
+### Releases (GitHub Actions)
+
+`.github/workflows/build.yml` builds both versions on every push, on GitHub's Apple Silicon
+(`macos-15`) and Intel (`macos-15-intel`) runners. The zips appear under the run's
+**Artifacts**. To publish a release:
+
+1. Set the version in `phonecam/__init__.py`, for example `__version__ = "0.2.0"`, and push it.
+2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The workflow then creates the GitHub Release with both zips. It refuses to publish if the tag
+doesn't match `__version__`.
+
+### Check that the app doesn't need Python
+
+On the Mac where you want to verify it, preferably one without Homebrew:
+
+1. Check what's installed. `ls /opt/homebrew /usr/local/bin/python3 /Library/Frameworks/Python.framework`
+   should report "No such file" for each one. `/usr/bin/python3` exists on every Mac; it's
+   Apple's installer stub for the Command Line Tools, and PhoneCam never uses it.
+2. Run the self-test: `/Applications/PhoneCam.app/Contents/MacOS/PhoneCam --self-test` should end with
+   **Self-test passed.**
+3. Open PhoneCam normally, then list any libraries it loaded from outside the app and macOS:
+   ```bash
+   lsof -c PhoneCam | grep -E '\.(so|dylib)$' | grep -v -E 'PhoneCam\.app|/usr/lib/|/System/'
+   ```
+   This should print **nothing**.
 
 ## Troubleshooting
 

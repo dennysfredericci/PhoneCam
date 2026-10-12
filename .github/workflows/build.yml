@@ -1,0 +1,90 @@
+# Builds PhoneCam.app for Apple Silicon and Intel on every push, and publishes
+# both zips as a GitHub Release when a version tag (v1.2.3) is pushed.
+#
+# Each CPU type gets its own native build (PyAV has no universal binaries),
+# so the matrix uses one GitHub-hosted runner per architecture.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15        # Apple Silicon (arm64)
+            flavor: apple-silicon
+          - runner: macos-15-intel  # Intel (x86_64)
+            flavor: intel
+    runs-on: ${{ matrix.runner }}
+    name: build (${{ matrix.flavor }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Check that the tag matches phonecam/__init__.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' phonecam/__init__.py)"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} doesn't match __version__ ${version}"
+            exit 1
+          fi
+
+      # Builds from a clean venv, checks the bundle is self-contained and
+      # runs the app's --self-test (a full WebRTC/H.264 loopback).
+      - name: Build PhoneCam.app
+        run: ./build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PhoneCam-${{ matrix.flavor }}
+          path: dist/PhoneCam-*.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Download
+
+          | Your Mac (Apple menu > About This Mac) | File |
+          |---|---|
+          | **Chip: Apple M1, M2, M3, M4...** (macOS 14 or newer) | `PhoneCam-*-apple-silicon.zip` |
+          | **Processor: Intel** (macOS 13 or newer) | `PhoneCam-*-intel.zip` |
+
+          Unzip it and drag **PhoneCam.app** to Applications. The app isn't signed by Apple, so the
+          first time you open it macOS blocks it: go to **System Settings > Privacy & Security** and
+          click **Open Anyway** (see the README for details). Requires OBS Studio 30 or newer for the
+          virtual camera.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PhoneCam $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes

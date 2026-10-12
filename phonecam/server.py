@@ -99,6 +99,10 @@ class PhoneCamServer:
         self._ip_task: asyncio.Task | None = None
 
     @property
+    def connected(self) -> bool:
+        return self.pc is not None and self.pc.connectionState == "connected"
+
+    @property
     def urls(self) -> list[str]:
         return [f"https://{ip}:{self.port}" for ip in self.ips]
 

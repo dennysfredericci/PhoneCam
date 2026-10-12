@@ -102,6 +102,14 @@ const video = $("preview"), startBtn = $("start"), switchBtn = $("switch");
 const clientId = sessionStorage.getItem("phonecam-id") || Math.random().toString(36).slice(2);
 sessionStorage.setItem("phonecam-id", clientId);
 
+// The QR code on the Mac carries the PIN after "#", which browsers never send
+// to the server. Remember it and tidy it out of the address bar.
+const hashPin = new URLSearchParams(location.hash.slice(1)).get("pin");
+if (hashPin) {
+  savePin(hashPin);
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
 let running = false;
 let facing = "environment";   // back camera: better quality than the selfie camera
 let stream = null, pc = null, sender = null;
