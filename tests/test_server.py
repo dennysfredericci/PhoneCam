@@ -89,3 +89,25 @@ def test_pin_required_and_lockout():
             await server.stop()
 
     asyncio.run(scenario())
+
+
+def test_pin_change_applies_to_new_connections_immediately():
+    async def scenario():
+        server, _ = await start_server(pin="1111")
+        try:
+            async with http_session() as http:
+                phone, status, _ = await phone_offer(http, server, pin="1111")
+                assert status == 200
+                await wait_for(lambda: server.connected)
+
+                server.pin = "2222"  # what the menu's "Change PIN..." does
+                _, status, _ = await phone_offer(http, server, client_id="B", pin="1111")
+                assert status == 401  # old PIN no longer accepted
+                assert server.connected  # the phone already streaming is not cut off
+                _, status, _ = await phone_offer(http, server, client_id="B", pin="2222")
+                assert status == 200
+                await phone.close()
+        finally:
+            await server.stop()
+
+    asyncio.run(scenario())

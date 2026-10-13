@@ -19,7 +19,7 @@ from AppKit import NSImage, NSPasteboard, NSPasteboardTypeString
 from qrcode.image.pure import PyPNGImage
 from ServiceManagement import SMAppService, SMAppServiceStatusEnabled, SMAppServiceStatusRequiresApproval
 
-from phonecam.paths import support_dir
+from phonecam.paths import is_valid_pin, random_pin, save_setting, support_dir
 from phonecam.server import PhoneCamServer
 from phonecam.vcam import VirtualCamera, VirtualCameraError
 
@@ -119,7 +119,7 @@ class PhoneCamApp(rumps.App):
         stats = self.server.stats
         # Rebuilding an open menu makes it flicker, so the structure is only
         # rebuilt when it changes; the stats line is updated in place.
-        state = (status, symbol, tuple(self.server.urls), bool(self.camera_error), bool(stats))
+        state = (status, symbol, tuple(self.server.urls), bool(self.camera_error), bool(stats), self.pin)
         if state == self._shown:
             if self._stats_item is not None and self._stats_item.title != stats:
                 self._stats_item.title = stats
@@ -144,6 +144,8 @@ class PhoneCamApp(rumps.App):
             if self.pin:
                 items.append(rumps.MenuItem(f"    PIN: {self.pin}", callback=lambda _: self._copy(self.pin)))
             items.append(self._qr_menu(urls))
+        if not self.server_thread.error:
+            items.append(rumps.MenuItem("Change PIN..." if self.pin else "Set a PIN...", callback=self._change_pin))
         elif not self.server_thread.error:
             items.append(rumps.MenuItem("No network - connect to Wi-Fi"))
 
@@ -182,6 +184,35 @@ class PhoneCamApp(rumps.App):
         return menu
 
     # ----- actions -----
+
+    def _change_pin(self, _=None) -> None:
+        window = rumps.Window(
+            title="Change PIN",
+            message="Type a new PIN (4 to 12 digits), or click Random for a new 6-digit one.\n\n"
+            "The phone streaming now keeps streaming. Phones that connect from now on "
+            "need the new PIN (each phone asks for it once).",
+            default_text="",
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(220, 24),
+        )
+        window.add_button("Random")
+        response = window.run()
+        if response.clicked == 0:  # Cancel
+            return
+        if response.clicked == 1:  # Save
+            pin = response.text.strip()
+            if not is_valid_pin(pin):
+                rumps.alert(title="PIN not changed", message="The PIN must be 4 to 12 digits (numbers only).")
+                return
+        else:  # Random
+            pin = random_pin()
+        save_setting("pin", pin)
+        self.pin = pin
+        self.server.pin = pin  # checked on every new connection, so this applies immediately
+        log.info("PIN changed from the menu")
+        self._refresh()  # new PIN line and QR code
+        rumps.alert(title="PIN changed", message=f"The new PIN is {pin}.\n\nThe QR code in the menu already includes it.")
 
     def _copy(self, text: str) -> None:
         board = NSPasteboard.generalPasteboard()

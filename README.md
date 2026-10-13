@@ -70,6 +70,7 @@ while a phone is streaming, and shows a warning triangle if something needs atte
 - the URL to open on the phone, and the **PIN**. Click either one to copy it;
 - **Show QR Code**: scan it with the phone's camera. It opens the page with the PIN already
   filled in;
+- **Change PIN...**: set your own PIN or a new random one (see [PIN](#pin));
 - **Start at Login**: tick it to start PhoneCam automatically. If macOS asks, switch PhoneCam on
   in System Settings > General > Login Items;
 - **Open Log Folder** and **Quit PhoneCam**.
@@ -104,8 +105,10 @@ video only goes from the phone to the Mac.
 - A random 6-digit PIN is created on first run. It's shown in the menu bar, or printed in the terminal version.
 - The phone asks for it once and remembers it. If it's wrong or you change it, the phone asks again.
 - After 5 wrong tries, that address is locked out for 60 seconds.
-- To change the PIN, edit `"pin"` in `settings.json` and restart PhoneCam.
-  `"pin": ""` turns protection off.
+- To change it, choose **Change PIN...** in the menu bar. Type a new PIN (4–12 digits), or click
+  **Random**. It applies immediately: the phone streaming now keeps streaming, and phones that
+  connect from then on need the new PIN.
+- You can also edit `"pin"` in `settings.json` and restart PhoneCam. `"pin": ""` turns protection off.
 
 ## Connect your phone
 

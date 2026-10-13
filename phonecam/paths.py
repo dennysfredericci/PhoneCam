@@ -33,6 +33,15 @@ def support_dir() -> Path:
     return path
 
 
+def random_pin() -> str:
+    return f"{secrets.randbelow(10**6):06d}"
+
+
+def is_valid_pin(pin: str) -> bool:
+    """4 to 12 digits: the phone page shows a numeric keypad for it."""
+    return pin.isdigit() and 4 <= len(pin) <= 12
+
+
 def load_settings() -> dict:
     """Read settings.json, filling in (and saving) defaults for missing keys.
 
@@ -46,13 +55,21 @@ def load_settings() -> dict:
             stored = json.loads(path.read_text())
         except (OSError, ValueError) as exc:
             logging.getLogger(__name__).warning("Ignoring invalid %s: %s", path, exc)
-            return {**DEFAULT_SETTINGS, "pin": f"{secrets.randbelow(10**6):06d}"}  # don't overwrite the user's file
+            return {**DEFAULT_SETTINGS, "pin": random_pin()}  # don't overwrite the user's file
     settings = {**DEFAULT_SETTINGS, **stored}
-    settings.setdefault("pin", f"{secrets.randbelow(10**6):06d}")
+    settings.setdefault("pin", random_pin())
     settings["pin"] = str(settings["pin"])
     if settings != stored:
         path.write_text(json.dumps(settings, indent=2) + "\n")
     return settings
+
+
+def save_setting(key: str, value) -> None:
+    """Change one value in settings.json, keeping everything else in the file."""
+    path = support_dir() / "settings.json"
+    settings = load_settings()
+    settings[key] = value
+    path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
 def setup_logging(debug: bool = False) -> Path:

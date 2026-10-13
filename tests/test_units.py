@@ -102,3 +102,15 @@ def test_stale_stun_retry_error_is_hidden_but_others_are_not(caplog):
     assert "Ignored a STUN retry" in caplog.text
     assert "Exception in callback Transaction" not in caplog.text
     assert "ZeroDivisionError" in caplog.text
+
+
+def test_pin_rules_and_saving_one_setting():
+    assert paths.is_valid_pin("1234") and paths.is_valid_pin("123456789012")
+    assert not paths.is_valid_pin("123") and not paths.is_valid_pin("1234567890123")
+    assert not paths.is_valid_pin("12a4") and not paths.is_valid_pin("")
+    assert paths.is_valid_pin(paths.random_pin())
+
+    paths.save_setting("port", 9443)
+    paths.save_setting("pin", "7777")
+    settings = paths.load_settings()
+    assert settings["pin"] == "7777" and settings["port"] == 9443 and settings["turn_port"] == 3478
