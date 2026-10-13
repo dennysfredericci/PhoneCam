@@ -20,10 +20,8 @@ import pytest
 from helpers import REAL_HOME, free_port, start_server, wait_for
 
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-pytestmark = [
-    pytest.mark.skipif(os.environ.get("PHONECAM_BROWSER_TESTS") != "1", reason="set PHONECAM_BROWSER_TESTS=1 to run (CI does)"),
-    pytest.mark.skipif(not CHROME.exists(), reason="Google Chrome not installed"),
-]
+# When asked for (CI), a missing Chrome is a failure, not a silent skip.
+pytestmark = pytest.mark.skipif(os.environ.get("PHONECAM_BROWSER_TESTS") != "1", reason="set PHONECAM_BROWSER_TESTS=1 to run (CI does)")
 
 
 class Browser:
@@ -72,6 +70,8 @@ async def _open_page(url: str, profile: Path):
 
 @pytest.mark.parametrize("relay", [False, True], ids=["direct", "relay"])
 def test_page_goes_live_with_pin_from_qr_link(relay, tmp_path):
+    assert CHROME.exists(), f"PHONECAM_BROWSER_TESTS=1 but Chrome isn't installed at {CHROME}"
+
     async def scenario():
         server, camera = await start_server(pin="2468")
         query = "?relay" if relay else ""
