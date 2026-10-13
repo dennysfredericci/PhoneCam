@@ -64,13 +64,15 @@ find devices on your local network. Allow both, because the phone connects over 
 PhoneCam lives in the **menu bar** as a video camera icon. There's no Dock icon. The icon is filled
 while a phone is streaming, and shows a warning triangle if something needs attention. Click it to see:
 
-- the status, for example *Waiting for phone* or *Connected to 192.168.1.30*;
+- the status, for example *Waiting for phone* or *Connected to 192.168.1.30*, and while
+  streaming, what's arriving, for example *1920×1080 · 30 fps · 6.2 Mbps* (plus *via TCP relay*
+  when the fallback is used);
 - the URL to open on the phone, and the **PIN**. Click either one to copy it;
 - **Show QR Code**: scan it with the phone's camera. It opens the page with the PIN already
   filled in;
+- **Start at Login**: tick it to start PhoneCam automatically. If macOS asks, switch PhoneCam on
+  in System Settings > General > Login Items;
 - **Open Log Folder** and **Quit PhoneCam**.
-
-To start PhoneCam automatically, add it in **System Settings > General > Login Items**.
 
 ## Run from source (development)
 
@@ -138,6 +140,21 @@ Select **OBS Virtual Camera** as the camera:
 - **OBS**: add a source **Video Capture Device**, then pick **OBS Virtual Camera**.
 
 If an app was already open when you set up the OBS Virtual Camera, restart that app once.
+
+### Tests
+
+```bash
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+```
+
+The tests run real WebRTC calls with aiortc playing the phone, plus the PIN, the TCP relay and
+the image fitting. They use a temporary home folder, so they never touch your real settings or
+certificate. CI runs them on both CPU types before building.
+
+`tests/test_page.py` drives the real phone page in headless Google Chrome with a fake camera. It
+only runs when `PHONECAM_BROWSER_TESTS=1` is set, which CI does. Locally it's skipped by default,
+because launching Chrome from a test can trigger macOS dialogs (for example about the keychain).
 
 ## Build the app
 

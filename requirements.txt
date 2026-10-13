@@ -28,6 +28,7 @@ pyee==14.0.0
 pylibsrtp==1.0.0
 pyobjc-core==12.2.2
 pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-ServiceManagement==12.2.2  # "Start at Login" (SMAppService)
 pyOpenSSL==26.4.0
 typing_extensions==4.16.0
 yarl==1.25.1

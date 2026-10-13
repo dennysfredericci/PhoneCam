@@ -10,12 +10,14 @@ they're replaced atomically and only displayed.
 import asyncio
 import logging
 import subprocess
+import sys
 import threading
 
 import qrcode
 import rumps
 from AppKit import NSImage, NSPasteboard, NSPasteboardTypeString
 from qrcode.image.pure import PyPNGImage
+from ServiceManagement import SMAppService, SMAppServiceStatusEnabled, SMAppServiceStatusRequiresApproval
 
 from phonecam.paths import support_dir
 from phonecam.server import PhoneCamServer
@@ -24,6 +26,7 @@ from phonecam.vcam import VirtualCamera, VirtualCameraError
 log = logging.getLogger(__name__)
 
 QR_SIZE = 220  # points
+LOGIN_ITEMS_SETTINGS = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
 
 
 class _ServerThread:
@@ -72,6 +75,7 @@ class PhoneCamApp(rumps.App):
         self.server_thread = _ServerThread(self.server)
         self.camera_error = ""
         self._shown = None  # what the menu currently shows, to rebuild only on change
+        self._stats_item: rumps.MenuItem | None = None
         self._set_icon("video")
 
     # ----- lifecycle -----
@@ -112,13 +116,21 @@ class PhoneCamApp(rumps.App):
 
     def _refresh(self, _=None) -> None:
         status, symbol = self._status()
-        state = (status, symbol, tuple(self.server.urls), bool(self.camera_error))
+        stats = self.server.stats
+        # Rebuilding an open menu makes it flicker, so the structure is only
+        # rebuilt when it changes; the stats line is updated in place.
+        state = (status, symbol, tuple(self.server.urls), bool(self.camera_error), bool(stats))
         if state == self._shown:
+            if self._stats_item is not None and self._stats_item.title != stats:
+                self._stats_item.title = stats
             return
         self._shown = state
         self._set_icon(symbol)
 
         items: list = [rumps.MenuItem(status)]  # items without a callback show greyed out
+        self._stats_item = rumps.MenuItem(stats) if stats else None
+        if self._stats_item:
+            items.append(self._stats_item)
         if self.camera_error:
             items.append(rumps.MenuItem("How to Fix...", callback=self._show_camera_help))
             items.append(rumps.MenuItem("Try Again", callback=self._retry_camera))
@@ -139,6 +151,13 @@ class PhoneCamApp(rumps.App):
             None,
             rumps.MenuItem('In Zoom/Teams/Meet/OBS, choose "OBS Virtual Camera"'),
             rumps.MenuItem("Open Log Folder", callback=lambda _: subprocess.run(["open", str(support_dir())])),
+        ]
+        # Only in the packaged app: from source, "this app" would be Python itself.
+        if getattr(sys, "frozen", False):
+            login = rumps.MenuItem("Start at Login", callback=self._toggle_login)
+            login.state = SMAppService.mainAppService().status() == SMAppServiceStatusEnabled
+            items.append(login)
+        items += [
             None,
             rumps.MenuItem("Quit PhoneCam", callback=self._quit, key="q"),
         ]
@@ -175,6 +194,20 @@ class PhoneCamApp(rumps.App):
     def _retry_camera(self, _=None) -> None:
         self._start_camera()
         self._refresh()
+
+    def _toggle_login(self, item: rumps.MenuItem) -> None:
+        # SMAppService (macOS 13+) registers this .app as a login item, the
+        # same list as System Settings > General > Login Items.
+        service = SMAppService.mainAppService()
+        if item.state:
+            ok, error = service.unregisterAndReturnError_(None)
+        else:
+            ok, error = service.registerAndReturnError_(None)
+        if not ok:
+            log.warning("Login item change failed: %s", error)
+        if service.status() == SMAppServiceStatusRequiresApproval:
+            subprocess.run(["open", LOGIN_ITEMS_SETTINGS])  # macOS wants the user to switch it on there
+        item.state = service.status() == SMAppServiceStatusEnabled
 
     def _set_icon(self, symbol: str) -> None:
         # A built-in SF Symbol (macOS 11+) as a template image, so it follows

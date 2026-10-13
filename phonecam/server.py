@@ -65,6 +65,35 @@ def _add_video_receiver(pc: RTCPeerConnection) -> None:
     pc.addTransceiver("video", direction="recvonly").setCodecPreferences(codecs)
 
 
+def _ignore_stale_stun_retries(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """asyncio exception handler that hides one harmless aioice error.
+
+    When a connection is closed while an ICE connectivity check is still
+    retrying, aioice can leave the check's retry timer running. When it fires
+    it sends on the already-closed UDP socket and raises AttributeError, which
+    asyncio would log as a long "Exception in callback Transaction.__retry()"
+    traceback. Nothing is affected (that connection is gone), so it's logged
+    as one debug line. Every other error goes to asyncio's default handler.
+    """
+    if isinstance(context.get("exception"), AttributeError) and "Transaction.__retry" in repr(context.get("handle")):
+        log.debug("Ignored a STUN retry on a closed connection (aioice)")
+        return
+    loop.default_exception_handler(context)
+
+
+def _via_relay(receiver: RTCRtpReceiver) -> bool:
+    """True if the media path ICE selected goes through our TURN relay.
+
+    aiortc has no public "selected candidate pair" API, so this peeks at
+    aioice's nominated pair (component 1 = RTP).
+    """
+    try:
+        pair = receiver.transport.transport._connection._nominated.get(1)
+        return pair is not None and pair.remote_candidate.type == "relay"
+    except AttributeError:
+        return False
+
+
 def _tune_answer_sdp(sdp: str) -> str:
     """Adjust the H.264 parameters in our SDP answer before the phone sees them.
 
@@ -94,6 +123,9 @@ class PhoneCamServer:
         self.pc: RTCPeerConnection | None = None
         self.client_id = ""  # random id sent by the phone page that owns self.pc
         self.status = "Waiting for phone"  # read by the CLI/menu bar
+        self.stats = ""  # what's arriving, e.g. "1920x1080 · 30 fps · 6.1 Mbps" (menu bar)
+        self._frames = 0  # frames received from the current phone
+        self._frame_size = (0, 0)
         self._ssl = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         self._runner: web.AppRunner | None = None
         self._ip_task: asyncio.Task | None = None
@@ -107,6 +139,7 @@ class PhoneCamServer:
         return [f"https://{ip}:{self.port}" for ip in self.ips]
 
     async def start(self) -> None:
+        asyncio.get_running_loop().set_exception_handler(_ignore_stale_stun_retries)
         self._load_certificate(local_ips())
         app = web.Application()
         app.router.add_get("/", self._index)
@@ -218,7 +251,9 @@ class PhoneCamServer:
         @pc.on("track")
         def on_track(track):
             if track.kind == "video":
+                receiver = next(t.receiver for t in pc.getTransceivers() if t.receiver.track is track)
                 asyncio.ensure_future(self._consume(pc, track))
+                asyncio.ensure_future(self._measure(pc, receiver))
 
         @pc.on("connectionstatechange")
         async def on_state():
@@ -263,13 +298,40 @@ class PhoneCamServer:
                     logged_size = (frame.width, frame.height)
                     log.info("Receiving %dx%d", *logged_size)
                 self.vcam.submit(frame)
+                self._frames += 1
+                self._frame_size = (frame.width, frame.height)
         except MediaStreamError:
             pass  # track ended: phone stopped or disconnected
         finally:
             if pc is self.pc:
                 self.vcam.submit(None)
 
+    async def _measure(self, pc: RTCPeerConnection, receiver: RTCRtpReceiver) -> None:
+        """Once a second, summarise what's actually arriving into self.stats."""
+        last_frames, last_bytes, last_time = self._frames, None, time.monotonic()
+        while pc is self.pc:
+            await asyncio.sleep(1)
+            if pc is not self.pc:
+                break
+            report = await receiver.getStats()
+            # Transport bytes include a little RTCP; close enough for a bitrate readout.
+            received = next((s.bytesReceived for s in report.values() if s.type == "transport"), None)
+            now = time.monotonic()
+            elapsed = now - last_time
+            if not self.connected or self._frames == 0:
+                self.stats = ""
+            else:
+                parts = [f"{self._frame_size[0]}\u00d7{self._frame_size[1]}", f"{(self._frames - last_frames) / elapsed:.0f} fps"]
+                if received is not None and last_bytes is not None:
+                    parts.append(f"{(received - last_bytes) * 8 / elapsed / 1e6:.1f} Mbps")
+                if _via_relay(receiver):
+                    parts.append("via TCP relay")
+                self.stats = " \u00b7 ".join(parts)
+            last_frames, last_bytes, last_time = self._frames, received, now
+
     async def _close_peer(self) -> None:
+        self.stats = ""
+        self._frames = 0
         pc, self.pc = self.pc, None
         self.vcam.submit(None)
         self.status = "Waiting for phone"

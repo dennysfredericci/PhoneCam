@@ -91,7 +91,10 @@ def run_self_test() -> int:
         import qrcode  # noqa: F401
         import rumps  # noqa: F401
 
-        checks.append("menu bar libraries loaded")
+        from ServiceManagement import SMAppService
+
+        SMAppService.mainAppService().status()  # read-only: never registers anything
+        checks.append("menu bar and login-item libraries loaded")
         from phonecam.paths import resource_path
 
         assert resource_path("web", "index.html").is_file(), "web/index.html missing from bundle"

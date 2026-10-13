@@ -35,6 +35,7 @@ coll = COLLECT(exe, a.binaries, a.datas, name="PhoneCam")
 app = BUNDLE(
     coll,
     name="PhoneCam.app",
+    icon="assets/PhoneCam.icns",  # drawn by assets/make_icon.py
     bundle_identifier="io.github.dennysfredericci.phonecam",
     version=version,
     info_plist={

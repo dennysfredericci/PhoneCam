@@ -34,6 +34,14 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Run the tests
+        env:
+          PHONECAM_BROWSER_TESTS: "1"  # also drive the phone page in headless Chrome
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet -r requirements.txt -r requirements-dev.txt
+          .venv/bin/python -m pytest -q
+
       - name: Check that the tag matches phonecam/__init__.py
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
